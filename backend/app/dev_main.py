@@ -22,6 +22,7 @@ app.add_middleware(
         "http://127.0.0.1:5173",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "https://filter-shingle-giggly.ngrok-free.dev/"
     ],
     allow_methods=["*"],
     allow_headers=["*"],

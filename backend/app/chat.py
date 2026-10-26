@@ -16,6 +16,11 @@ try:
 except ImportError:
     from app.db_stub import get_history, save_message
 
+try:
+    from app.db import create_session as _db_create_session
+except ImportError:
+    _db_create_session = None
+
 router = APIRouter()
 
 # Only the most recent messages are sent to the model, which keeps replies
@@ -73,3 +78,19 @@ def chat(req: ChatRequest):
 def chat_history(session_id: str):
     """Return the saved conversation so the UI can reload it after a refresh."""
     return {"session_id": session_id, "messages": get_history(session_id)}
+
+
+class SessionRequest(BaseModel):
+    affiliation: Optional[str] = None  # "organisation" or "independent"
+
+
+@router.post("/session")
+def create_new_session(req: Optional[SessionRequest] = None):
+    """The server creates the session id; the frontend calls this after onboarding."""
+    session_id = uuid.uuid4().hex
+    if _db_create_session is not None:
+        try:
+            _db_create_session(session_id, (req.affiliation if req else "") or "")
+        except Exception as exc:  # the id still works without a sessions row
+            print(f"[session] could not store session: {exc}")
+    return {"session_id": session_id}

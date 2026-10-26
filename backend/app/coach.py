@@ -81,7 +81,6 @@ def _get_llm() -> ChatGoogleGenerativeAI:
         _llm = ChatGoogleGenerativeAI(
             model=model,
             google_api_key=api_key,
-            temperature=0.7,
             timeout=30,  # fail fast instead of loading forever
             max_retries=1,
         )
@@ -135,11 +134,12 @@ EXPLAIN_FALLBACK = (
 
 
 def explain_result(score: int, band: str) -> str:
-    """Non-clinical explanation of an assessment result (score range 10-50)."""
+    """Non-clinical explanation of an assessment result (score is 0-100)."""
     try:
         prompt = (
-            "A user completed a 10-question wellbeing check-in. "
-            f"Their score is {score} out of 50, placed in the '{band}' band. "
+            "A user completed a 10-question wellbeing check-in about the last "
+            f"two weeks. Their score is {score} out of 100 (higher means better "
+            f"recent wellbeing), placed in the '{band}' band. "
             "Write a 3-4 sentence, warm, NON-clinical explanation. Do not "
             "diagnose or use clinical wording. End with two gentle next steps "
             "chosen only from: mindfulness, exercise, healthy eating, talking "

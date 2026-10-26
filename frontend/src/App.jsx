@@ -1,33 +1,173 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import Onboarding from './pages/Onboarding.jsx';
 import Chat from './pages/Chat.jsx';
 import Checkin from './pages/Checkin.jsx';
 import Trends from './pages/Trends.jsx';
 import NonClinicalFooter from './components/NonClinicalFooter.jsx';
+import Sidebar from './components/Sidebar.jsx';
 import { createSession } from './api.js';
 
-const NAV = [
-  { id: 'chat', label: 'Chat' },
-  { id: 'checkin', label: 'Check-in' },
-  { id: 'trends', label: 'Trends' },
-];
+const STORAGE_KEYS = {
+  onboarded: 'mindpulse_onboarded',
+  access: 'mindpulse_access',
+  sessionId: 'mindpulse_session_id',
+  conversations: 'mindpulse_conversations',
+};
+
+function readStoredValue(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === null) return fallback;
+    const parsed = JSON.parse(raw);
+    return parsed ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStoredValue(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Ignore storage failures silently.
+  }
+}
+
+function readConversations() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.conversations);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeConversations(conversations) {
+  try {
+    localStorage.setItem(STORAGE_KEYS.conversations, JSON.stringify(conversations));
+  } catch {
+    // Ignore storage failures silently.
+  }
+}
+
+function normalizeTitle(text) {
+  return String(text || '').replace(/\s+/g, ' ').trim().slice(0, 40) || 'New chat';
+}
 
 export default function App() {
-  const [onboarded, setOnboarded] = useState(false);
+  const [onboarded, setOnboarded] = useState(() =>
+    readStoredValue(STORAGE_KEYS.onboarded, false),
+  );
+  const [access, setAccess] = useState(() => readStoredValue(STORAGE_KEYS.access, ''));
+  const [sessionId, setSessionId] = useState(() =>
+    readStoredValue(STORAGE_KEYS.sessionId, ''),
+  );
   const [tab, setTab] = useState('chat');
-  const [sessionId, setSessionId] = useState('');
   const [chatSeed, setChatSeed] = useState('');
+  const [chatKey, setChatKey] = useState(0);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [conversations, setConversations] = useState(() => readConversations());
 
-  // The backend owns the session id. If it cannot be reached here, the chat
-  // will still get one from the server on the first message.
-  async function completeOnboarding(access) {
+  useEffect(() => {
+    writeStoredValue(STORAGE_KEYS.onboarded, onboarded);
+  }, [onboarded]);
+
+  useEffect(() => {
+    writeStoredValue(STORAGE_KEYS.access, access);
+  }, [access]);
+
+  useEffect(() => {
+    writeStoredValue(STORAGE_KEYS.sessionId, sessionId);
+  }, [sessionId]);
+
+  useEffect(() => {
+    writeConversations(conversations);
+  }, [conversations]);
+
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setSidebarOpen(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  async function completeOnboarding(nextAccess) {
+    setAccess(nextAccess);
+    try {
+      const id = await createSession(nextAccess);
+      setSessionId(id || '');
+      writeStoredValue(STORAGE_KEYS.sessionId, id || '');
+    } catch {
+      setSessionId('');
+      writeStoredValue(STORAGE_KEYS.sessionId, '');
+    }
+    setOnboarded(true);
+  }
+
+  async function handleNewChat() {
+    setChatSeed('');
+    setSidebarOpen(false);
+    setTab('chat');
     try {
       const id = await createSession(access);
       setSessionId(id || '');
+      writeStoredValue(STORAGE_KEYS.sessionId, id || '');
     } catch {
       setSessionId('');
+      writeStoredValue(STORAGE_KEYS.sessionId, '');
     }
-    setOnboarded(true);
+    setChatKey((current) => current + 1);
+  }
+
+  function handleSelectConversation(id) {
+    setSessionId(id);
+    setChatSeed('');
+    setTab('chat');
+    setSidebarOpen(false);
+    setChatKey((current) => current + 1);
+  }
+
+  function handleDeleteConversation(id) {
+    if (!id) return;
+    const target = conversations.find((item) => item.id === id);
+    const confirmed = window.confirm(
+      `Delete the conversation "${target?.title || 'this chat'}" from your local history?`,
+    );
+    if (!confirmed) return;
+
+    setConversations((current) => current.filter((item) => item.id !== id));
+    if (sessionId === id) {
+      setSessionId('');
+      writeStoredValue(STORAGE_KEYS.sessionId, '');
+      setChatKey((current) => current + 1);
+    }
+  }
+
+  function handleClearAllHistory() {
+    if (!conversations.length) return;
+    const confirmed = window.confirm('Clear all saved chat history?');
+    if (!confirmed) return;
+    setConversations([]);
+  }
+
+  function handleStartFresh() {
+    setOnboarded(false);
+    setAccess('');
+    setSessionId('');
+    setTab('chat');
+    setChatSeed('');
+    setChatKey((current) => current + 1);
+    setConversations([]);
+    writeStoredValue(STORAGE_KEYS.access, '');
+    writeStoredValue(STORAGE_KEYS.sessionId, '');
+    writeStoredValue(STORAGE_KEYS.onboarded, false);
+    writeConversations([]);
   }
 
   function talkInChat(summaryText) {
@@ -35,58 +175,98 @@ export default function App() {
     setTab('chat');
   }
 
-  const nav = useMemo(() => NAV, []);
+  function handleMessageSent({ sessionId: incomingSessionId, text }) {
+    const effectiveId = incomingSessionId || sessionId;
+    if (!effectiveId) return;
+
+    setConversations((current) => {
+      const existing = current.find((item) => item.id === effectiveId);
+      const nextTitle = normalizeTitle(existing?.title || text);
+      const item = {
+        id: effectiveId,
+        title: nextTitle,
+        updatedAt: new Date().toISOString(),
+      };
+
+      const filtered = current.filter((entry) => entry.id !== effectiveId);
+      return [item, ...filtered].sort(
+        (a, b) => new Date(b.updatedAt) - new Date(a.updatedAt),
+      );
+    });
+  }
 
   if (!onboarded) {
     return <Onboarding onComplete={completeOnboarding} />;
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-gradient-to-b from-slate-50 to-white">
-      <header className="sticky top-0 z-10 bg-white/80 backdrop-blur border-b border-slate-200">
-        <div className="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-sky-500 to-teal-500 flex items-center justify-center shadow-sm">
-              <span className="text-white font-semibold">M</span>
-            </div>
-            <div className="leading-tight">
-              <p className="font-semibold text-slate-800 text-sm">MindPulse</p>
-              <p className="text-[11px] text-slate-500">AI Wellbeing Coach</p>
-            </div>
-          </div>
-          <nav className="flex gap-1 bg-slate-100 rounded-2xl p-1">
-            {nav.map((n) => (
+    <div className="h-dvh overflow-hidden bg-gradient-to-b from-slate-50 to-white">
+      <Sidebar
+        activeTab={tab}
+        conversations={conversations}
+        currentSessionId={sessionId}
+        mobileOpen={sidebarOpen}
+        onSelectTab={setTab}
+        onNewChat={handleNewChat}
+        onStartFresh={handleStartFresh}
+        onSelectConversation={handleSelectConversation}
+        onDeleteConversation={handleDeleteConversation}
+        onClearAllHistory={handleClearAllHistory}
+        onClose={() => setSidebarOpen(false)}
+      />
+
+      <div className="flex h-dvh flex-col md:pl-72">
+        <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/85 backdrop-blur md:hidden">
+          <div className="flex items-center justify-between px-4 py-3">
+            <div className="flex items-center gap-3">
               <button
-                key={n.id}
-                onClick={() => setTab(n.id)}
-                className={`px-3.5 py-1.5 text-sm font-medium rounded-xl transition ${
-                  tab === n.id
-                    ? 'bg-white text-teal-700 shadow-sm'
-                    : 'text-slate-500 hover:text-slate-700'
-                }`}
+                type="button"
+                onClick={() => setSidebarOpen(true)}
+                className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-lg text-slate-700 transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-teal-300"
+                aria-label="Open navigation menu"
               >
-                {n.label}
+                ☰
               </button>
-            ))}
-          </nav>
-        </div>
-      </header>
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-sky-500 to-teal-500 text-sm font-semibold text-white">
+                  M
+                </div>
+                <div className="leading-tight">
+                  <p className="text-sm font-semibold text-slate-800">MindPulse</p>
+                  <p className="text-[10px] text-slate-500">AI Coach</p>
+                </div>
+              </div>
+            </div>
 
-      <main className="flex-1 max-w-3xl w-full mx-auto flex flex-col">
-        {tab === 'chat' && (
-          <Chat
-            sessionId={sessionId}
-            seedMessage={chatSeed}
-            onSessionId={setSessionId}
-          />
-        )}
-        {tab === 'checkin' && (
-          <Checkin sessionId={sessionId} onTalkInChat={talkInChat} />
-        )}
-        {tab === 'trends' && <Trends sessionId={sessionId} />}
-      </main>
+            <button
+              type="button"
+              onClick={handleNewChat}
+              className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-r from-sky-600 to-teal-600 text-lg font-semibold text-white shadow-sm transition hover:brightness-105 focus:outline-none focus:ring-2 focus:ring-teal-300"
+              aria-label="Start a new chat"
+            >
+              ＋
+            </button>
+          </div>
+        </header>
 
-      <NonClinicalFooter />
+        <main className="flex flex-1 min-h-0 flex-col overflow-y-auto">
+          {tab === 'chat' && (
+            <Chat
+              key={chatKey}
+              sessionId={sessionId}
+              seedMessage={chatSeed}
+              onSessionId={setSessionId}
+              onMessageSent={handleMessageSent}
+            />
+          )}
+          {tab === 'checkin' && (
+            <Checkin sessionId={sessionId} onTalkInChat={talkInChat} />
+          )}
+          {tab === 'trends' && <Trends sessionId={sessionId} />}
+        </main>
+
+        <NonClinicalFooter />
+      </div>
     </div>
   );
 }
