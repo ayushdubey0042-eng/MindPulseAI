@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { sendChatMessage } from '../api.js';
+import { getChatHistory, sendChatMessage } from '../api.js';
+
+const QUICK_REPLIES = [
+  "I'm feeling stressed",
+  "I'm feeling low",
+  "I'm feeling good today",
+  'I need help winding down',
+];
 
 function TypingIndicator() {
   return (
@@ -45,22 +52,39 @@ function MessageBubble({ msg }) {
   );
 }
 
-export default function Chat({ sessionId, seedMessage }) {
+// onSessionId (optional): called when the backend creates a new session id,
+// so the parent can keep it for the check-in and trends screens.
+export default function Chat({ sessionId, seedMessage, onSessionId }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const scrollRef = useRef(null);
 
-  // Initial greeting
+  // Initial greeting, then reload any saved conversation for this session
   useEffect(() => {
-    setMessages([
-      {
-        id: 'greeting',
-        role: 'coach',
-        text: "Hi there — I'm your MindPulse coach. I'm here to listen and reflect with you. How have you been feeling lately?",
-      },
-    ]);
+    const greeting = {
+      id: 'greeting',
+      role: 'coach',
+      text: "Hi there — I'm your MindPulse coach. I'm here to listen and reflect with you. How have you been feeling lately?",
+    };
+    setMessages([greeting]);
+    if (sessionId) {
+      getChatHistory(sessionId)
+        .then((items) => {
+          if (!items.length) return;
+          const restored = items.map((it) => ({
+            id: crypto.randomUUID(),
+            // backend uses 'assistant'; this screen calls it 'coach'
+            role: it.role === 'assistant' ? 'coach' : 'user',
+            text: it.text,
+          }));
+          // Only restore if nothing else has been added meanwhile
+          setMessages((m) => (m.length <= 1 ? [greeting, ...restored] : m));
+        })
+        .catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Optional seed message from Check-in "Talk about this in chat"
@@ -80,6 +104,9 @@ export default function Chat({ sessionId, seedMessage }) {
     setError('');
     try {
       const data = await sendChatMessage(sessionId, text);
+      if (data.session_id && data.session_id !== sessionId) {
+        onSessionId?.(data.session_id);
+      }
       setMessages((m) => [
         ...m,
         {
@@ -117,6 +144,9 @@ export default function Chat({ sessionId, seedMessage }) {
     setLoading(true);
     try {
       const data = await sendChatMessage(sessionId, text);
+      if (data.session_id && data.session_id !== sessionId) {
+        onSessionId?.(data.session_id);
+      }
       setMessages((m) => [
         ...m,
         {
@@ -144,6 +174,20 @@ export default function Chat({ sessionId, seedMessage }) {
         {messages.map((m) => (
           <MessageBubble key={m.id} msg={m} />
         ))}
+        {messages.length === 1 && !loading && (
+          <div className="flex flex-wrap gap-2 pt-1">
+            {QUICK_REPLIES.map((q) => (
+              <button
+                key={q}
+                type="button"
+                onClick={() => sendSeed(q)}
+                className="rounded-full border border-teal-200 bg-white px-3 py-1.5 text-sm text-teal-700 transition hover:bg-teal-50"
+              >
+                {q}
+              </button>
+            ))}
+          </div>
+        )}
         {loading && (
           <div className="self-start bg-white border border-slate-200 rounded-2xl rounded-bl-md shadow-sm">
             <TypingIndicator />

@@ -4,6 +4,7 @@ import Chat from './pages/Chat.jsx';
 import Checkin from './pages/Checkin.jsx';
 import Trends from './pages/Trends.jsx';
 import NonClinicalFooter from './components/NonClinicalFooter.jsx';
+import { createSession } from './api.js';
 
 const NAV = [
   { id: 'chat', label: 'Chat' },
@@ -17,8 +18,15 @@ export default function App() {
   const [sessionId, setSessionId] = useState('');
   const [chatSeed, setChatSeed] = useState('');
 
-  function completeOnboarding() {
-    setSessionId(crypto.randomUUID());
+  // The backend owns the session id. If it cannot be reached here, the chat
+  // will still get one from the server on the first message.
+  async function completeOnboarding(access) {
+    try {
+      const id = await createSession(access);
+      setSessionId(id || '');
+    } catch {
+      setSessionId('');
+    }
     setOnboarded(true);
   }
 
@@ -69,6 +77,7 @@ export default function App() {
           <Chat
             sessionId={sessionId}
             seedMessage={chatSeed}
+            onSessionId={setSessionId}
           />
         )}
         {tab === 'checkin' && (

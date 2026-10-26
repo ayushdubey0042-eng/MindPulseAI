@@ -4,6 +4,9 @@
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 const USE_MOCK = import.meta.env.VITE_USE_MOCK === 'true';
+// Set VITE_REAL_CHAT=true to use the real /chat backend even while the
+// other screens (check-in, trends) still run on mock data.
+const REAL_CHAT = import.meta.env.VITE_REAL_CHAT === 'true';
 
 // ---------- helpers ----------
 async function postJson(path, body) {
@@ -80,12 +83,29 @@ function mockAssessment(answers) {
 }
 
 // ---------- public API ----------
+// Asks the backend to create a session and returns its id (string).
+// In pure mock mode there is no backend, so a local id is used instead.
+export async function createSession(affiliation) {
+  if (USE_MOCK && !REAL_CHAT) return crypto.randomUUID();
+  const data = await postJson('/session', { affiliation: affiliation || '' });
+  return data.session_id || '';
+}
+
+// sessionId may be null on the first message: the backend creates one and
+// returns it as `session_id` in the reply.
 export async function sendChatMessage(sessionId, message) {
-  if (USE_MOCK) {
+  if (USE_MOCK && !REAL_CHAT) {
     await new Promise((r) => setTimeout(r, 700));
     return mockChatReply(message);
   }
-  return postJson('/chat', { session_id: sessionId, message });
+  return postJson('/chat', { session_id: sessionId || undefined, message });
+}
+
+// Saved conversation for a session: [{ role: 'user' | 'assistant', text }]
+export async function getChatHistory(sessionId) {
+  if ((USE_MOCK && !REAL_CHAT) || !sessionId) return [];
+  const data = await getJson(`/chat/history?session_id=${encodeURIComponent(sessionId)}`);
+  return data.messages || [];
 }
 
 export async function getAssessmentQuestions() {
@@ -93,7 +113,9 @@ export async function getAssessmentQuestions() {
     await new Promise((r) => setTimeout(r, 300));
     return { questions: MOCK_QUESTIONS };
   }
-  return getJson('/assessment/questions');
+  const data = await getJson('/assessment/questions');
+  // Backend may return a plain array; the screens expect { questions }.
+  return Array.isArray(data) ? { questions: data } : data;
 }
 
 export async function submitAssessment(sessionId, answers) {
@@ -109,5 +131,7 @@ export async function getTrends(sessionId) {
     await new Promise((r) => setTimeout(r, 400));
     return { trends: mockTrends(sessionId) };
   }
-  return getJson(`/trends?session_id=${encodeURIComponent(sessionId)}`);
+  const data = await getJson(`/trends?session_id=${encodeURIComponent(sessionId)}`);
+  // Backend may return a plain array; the screens expect { trends }.
+  return Array.isArray(data) ? { trends: data } : data;
 }

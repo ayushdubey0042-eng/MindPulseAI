@@ -104,7 +104,7 @@ export default function Onboarding({ onComplete }) {
           <button
             type="button"
             disabled={!canContinue}
-            onClick={onComplete}
+            onClick={() => onComplete?.(access)}
             className="w-full rounded-2xl bg-gradient-to-r from-sky-600 to-teal-600 text-white font-medium py-3 transition shadow-md shadow-teal-200/50 disabled:opacity-40 disabled:cursor-not-allowed enabled:hover:brightness-105 enabled:active:translate-y-px"
           >
             Continue
