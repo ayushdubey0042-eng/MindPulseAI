@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import { getChatHistory, sendChatMessage } from '../api.js';
 
 const QUICK_REPLIES = [
-  "I'm feeling stressed",
-  "I'm feeling low",
-  "I'm feeling good today",
-  'I need help winding down',
+  'I want to reflect on today',
+  "I'm feeling a bit overwhelmed",
+  'What would help me feel more supported?',
+  'I need a calmer moment',
 ];
 
 function formatTime(value) {
@@ -40,7 +40,7 @@ function MessageBubble({ msg }) {
           </div>
         )}
 
-        <div className={`max-w-[80%] ${isUser ? 'self-end' : 'self-start'}`}>
+        <div className={`max-w-[82%] ${isUser ? 'self-end' : 'self-start'}`}>
           {!isUser && (
             <div className="mb-1.5 flex items-center gap-2 pl-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
               <span>Coach</span>
@@ -54,13 +54,23 @@ function MessageBubble({ msg }) {
                 Supportive note
               </span>
             </div>
-            <p className="whitespace-pre-wrap text-sm leading-6 text-slate-700">
-              {msg.text}
-            </p>
-            <p className="mt-2.5 text-xs leading-relaxed text-amber-700">
-              You deserve human support. If you are in crisis, please reach out to a
-              qualified professional or a local support line.
-            </p>
+            <p className="whitespace-pre-wrap text-sm leading-6 text-slate-700">{msg.text}</p>
+            {Array.isArray(msg.support_options) && msg.support_options.length > 0 && (
+              <div className="mt-3 border-t border-amber-200 pt-3">
+                <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-amber-800">
+                  Support options
+                </p>
+                <ul className="space-y-2 text-sm text-slate-700">
+                  {msg.support_options.map((option) => (
+                    <li key={`${option.name}-${option.contact}`} className="rounded-xl bg-white/70 p-2">
+                      <div className="font-medium text-slate-800">{option.name}</div>
+                      <div className="text-slate-600">{option.contact}</div>
+                      {option.note && <div className="text-xs text-slate-500">{option.note}</div>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
 
           {msg.createdAt && (
@@ -108,13 +118,13 @@ function MessageBubble({ msg }) {
   );
 }
 
-// onSessionId (optional): called when the backend creates a new session id,
-// so the parent can keep it for the check-in and trends screens.
-export default function Chat({ sessionId, seedMessage, onSessionId, onMessageSent }) {
+export default function Chat({ sessionId, seedMessage, onSessionId, onMessageSent, onNewChat }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [sessionLocked, setSessionLocked] = useState(false);
+  const [supportOptions, setSupportOptions] = useState([]);
   const scrollRef = useRef(null);
 
   useEffect(() => {
@@ -152,7 +162,7 @@ export default function Chat({ sessionId, seedMessage, onSessionId, onMessageSen
 
   async function sendSeed(text) {
     const trimmed = text.trim();
-    if (!trimmed || loading) return;
+    if (!trimmed || loading || sessionLocked) return;
 
     const createdAt = new Date().toISOString();
     setMessages((m) => [
@@ -169,6 +179,8 @@ export default function Chat({ sessionId, seedMessage, onSessionId, onMessageSen
         onSessionId?.(data.session_id);
       }
       onMessageSent?.({ sessionId: effectiveSessionId, text: trimmed });
+      setSessionLocked(Boolean(data.session_locked));
+      setSupportOptions(Array.isArray(data.support_options) ? data.support_options : []);
       setMessages((m) => [
         ...m,
         {
@@ -177,6 +189,7 @@ export default function Chat({ sessionId, seedMessage, onSessionId, onMessageSen
           text: data.reply,
           risk_flag: data.risk_flag,
           risk_level: data.risk_level,
+          support_options: data.support_options || [],
           createdAt: new Date().toISOString(),
         },
       ]);
@@ -197,7 +210,7 @@ export default function Chat({ sessionId, seedMessage, onSessionId, onMessageSen
   async function handleSend(e) {
     e?.preventDefault();
     const text = input.trim();
-    if (!text || loading) return;
+    if (!text || loading || sessionLocked) return;
     setInput('');
     setError('');
 
@@ -215,6 +228,8 @@ export default function Chat({ sessionId, seedMessage, onSessionId, onMessageSen
         onSessionId?.(data.session_id);
       }
       onMessageSent?.({ sessionId: effectiveSessionId, text });
+      setSessionLocked(Boolean(data.session_locked));
+      setSupportOptions(Array.isArray(data.support_options) ? data.support_options : []);
       setMessages((m) => [
         ...m,
         {
@@ -223,6 +238,7 @@ export default function Chat({ sessionId, seedMessage, onSessionId, onMessageSen
           text: data.reply,
           risk_flag: data.risk_flag,
           risk_level: data.risk_level,
+          support_options: data.support_options || [],
           createdAt: new Date().toISOString(),
         },
       ]);
@@ -245,7 +261,7 @@ export default function Chat({ sessionId, seedMessage, onSessionId, onMessageSen
             <MessageBubble key={m.id} msg={m} />
           ))}
 
-          {messages.length === 1 && !loading && (
+          {messages.length === 1 && !loading && !sessionLocked && (
             <div className="flex flex-wrap gap-2 pt-1">
               {QUICK_REPLIES.map((q) => (
                 <button
@@ -257,6 +273,21 @@ export default function Chat({ sessionId, seedMessage, onSessionId, onMessageSen
                   {q}
                 </button>
               ))}
+            </div>
+          )}
+
+          {sessionLocked && (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 shadow-sm">
+              <p className="mb-3 leading-relaxed">
+                This conversation has been paused. Please contact emergency services or a crisis support line. You can start a new chat when you are ready.
+              </p>
+              <button
+                type="button"
+                onClick={onNewChat}
+                className="rounded-xl bg-gradient-to-r from-sky-600 to-teal-600 px-4 py-2 font-medium text-white shadow-sm"
+              >
+                Start a new chat
+              </button>
             </div>
           )}
 
@@ -281,38 +312,40 @@ export default function Chat({ sessionId, seedMessage, onSessionId, onMessageSen
         </div>
       )}
 
-      <form
-        onSubmit={handleSend}
-        className="shrink-0 border-t border-slate-200 bg-white/80 px-4 py-3 backdrop-blur sm:px-8"
-      >
-        <div className="mx-auto flex max-w-3xl items-end gap-2">
-          <label htmlFor="chat-input" className="sr-only">
-            Message your coach
-          </label>
-          <textarea
-            id="chat-input"
-            rows={1}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                handleSend();
-              }
-            }}
-            placeholder="Write a message…"
-            disabled={loading}
-            className="max-h-32 flex-1 resize-none rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-teal-300 focus:outline-none focus:ring-2 focus:ring-teal-300 disabled:opacity-50"
-          />
-          <button
-            type="submit"
-            disabled={loading || !input.trim()}
-            className="rounded-2xl bg-gradient-to-r from-sky-600 to-teal-600 px-5 py-3 text-sm font-medium text-white shadow-md shadow-teal-200/50 transition hover:brightness-105 focus:outline-none focus:ring-2 focus:ring-teal-300 disabled:cursor-not-allowed disabled:opacity-40 enabled:active:translate-y-px"
-          >
-            Send
-          </button>
-        </div>
-      </form>
+      {!sessionLocked && (
+        <form
+          onSubmit={handleSend}
+          className="shrink-0 border-t border-slate-200 bg-white/80 px-4 py-3 backdrop-blur sm:px-8"
+        >
+          <div className="mx-auto flex max-w-3xl items-end gap-2">
+            <label htmlFor="chat-input" className="sr-only">
+              Message your coach
+            </label>
+            <textarea
+              id="chat-input"
+              rows={1}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
+              placeholder="Write a message…"
+              disabled={loading}
+              className="max-h-32 flex-1 resize-none rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-teal-300 focus:outline-none focus:ring-2 focus:ring-teal-300 disabled:opacity-50"
+            />
+            <button
+              type="submit"
+              disabled={loading || !input.trim()}
+              className="rounded-2xl bg-gradient-to-r from-sky-600 to-teal-600 px-5 py-3 text-sm font-medium text-white shadow-md shadow-teal-200/50 transition hover:brightness-105 focus:outline-none focus:ring-2 focus:ring-teal-300 disabled:cursor-not-allowed disabled:opacity-40 enabled:active:translate-y-px"
+            >
+              Send
+            </button>
+          </div>
+        </form>
+      )}
     </div>
   );
 }

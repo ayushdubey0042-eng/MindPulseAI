@@ -4,11 +4,46 @@
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 const USE_MOCK = import.meta.env.VITE_USE_MOCK === 'true';
-// Set VITE_REAL_CHAT=true to use the real /chat backend even while the
-// other screens (check-in, trends) still run on mock data.
 const REAL_CHAT = import.meta.env.VITE_REAL_CHAT === 'true';
 
-// ---------- helpers ----------
+const STORAGE_KEYS = {
+  userId: 'mindpulse_user_id',
+  sessionId: 'mindpulse_session_id',
+};
+
+function readStoredValue(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === null) return fallback;
+    const parsed = JSON.parse(raw);
+    return parsed ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStoredValue(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Ignore storage failures silently.
+  }
+}
+
+function getStoredUserId() {
+  return readStoredValue(STORAGE_KEYS.userId, '');
+}
+
+function storeUserId(userId) {
+  if (!userId) return;
+  writeStoredValue(STORAGE_KEYS.userId, userId);
+}
+
+function storeSessionId(sessionId) {
+  if (!sessionId) return;
+  writeStoredValue(STORAGE_KEYS.sessionId, sessionId);
+}
+
 async function postJson(path, body) {
   const res = await fetch(`${API_URL}${path}`, {
     method: 'POST',
@@ -25,83 +60,139 @@ async function getJson(path) {
   return res.json();
 }
 
-// ---------- mock data ----------
-const MOCK_QUESTIONS = [
-  { id: 1, text: 'I have felt calm and settled over the last two weeks.' },
-  { id: 2, text: 'I have felt able to cope with day-to-day pressures.' },
-  { id: 3, text: 'I have slept well and felt rested.' },
-  { id: 4, text: 'I have had energy for the things that matter to me.' },
-  { id: 5, text: 'I have felt connected to people around me.' },
-  { id: 6, text: 'I have been able to focus on what I am doing.' },
-  { id: 7, text: 'I have felt optimistic about the near future.' },
-  { id: 8, text: 'I have found time for things I enjoy.' },
-  { id: 9, text: 'I have felt useful and valued.' },
-  { id: 10, text: 'I have felt able to reach out when I needed support.' },
+const K10_OPTIONS = [
+  { value: 1, label: 'None of the time' },
+  { value: 2, label: 'A little of the time' },
+  { value: 3, label: 'Some of the time' },
+  { value: 4, label: 'Most of the time' },
+  { value: 5, label: 'All of the time' },
 ];
 
-const mockTrends = (sessionId) => [
-  { date: '2026-10-05', score: 32 },
-  { date: '2026-10-12', score: 38 },
-  { date: '2026-10-19', score: 41 },
+const MOCK_QUESTIONS = [
+  { id: 1, text: 'About how often did you feel tired out for no good reason?' },
+  { id: 2, text: 'About how often did you feel nervous?' },
+  { id: 3, text: 'About how often did you feel so nervous that nothing could calm you down?' },
+  { id: 4, text: 'About how often did you feel hopeless?' },
+  { id: 5, text: 'About how often did you feel restless or fidgety?' },
+  { id: 6, text: 'About how often did you feel so restless you could not sit still?' },
+  { id: 7, text: 'About how often did you feel depressed?' },
+  { id: 8, text: 'About how often did you feel that everything was an effort?' },
+  { id: 9, text: 'About how often did you feel so sad that nothing could cheer you up?' },
+  { id: 10, text: 'About how often did you feel worthless?' },
+];
+
+const mockTrends = () => [
+  { date: '2026-10-05', created_at: '2026-10-05T09:00:00', score: 18, band: 'moderate' },
+  { date: '2026-10-12', created_at: '2026-10-12T09:00:00', score: 25, band: 'high' },
+  { date: '2026-10-19', created_at: '2026-10-19T09:00:00', score: 31, band: 'very_high' },
 ];
 
 function mockChatReply(message) {
   const lower = message.toLowerCase();
-  if (lower.includes('hopeless')) {
+  if (lower.includes('i want to die') || lower.includes('not safe') || lower.includes('kill')) {
     return {
-      reply:
-        "I hear how heavy things feel right now, and I want you to know you are not alone in this. Because what you're describing sounds really significant, I'd gently encourage you to reach out to a trusted professional or a local support line — they can support you in ways I am not able to. You deserve real, human support through this.",
+      user_id: getStoredUserId(),
+      session_id: readStoredValue(STORAGE_KEYS.sessionId, ''),
+      reply: 'Please contact emergency services or a crisis line now. This coach cannot provide crisis support.',
       risk_flag: true,
       risk_level: 'high',
+      session_locked: true,
+      support_options: [],
     };
   }
   return {
+    user_id: getStoredUserId(),
+    session_id: readStoredValue(STORAGE_KEYS.sessionId, ''),
     reply:
-      "Thanks for sharing that with me. It sounds like there's a lot going on. Can you tell me a little more about what's been on your mind lately, and whether there's a specific moment or feeling you'd like to explore together?",
+      "Thanks for sharing that with me. What feels most important to explore right now, and what would help you feel a bit more supported?",
     risk_flag: false,
     risk_level: 'none',
+    session_locked: false,
+    support_options: [],
   };
 }
 
 function mockAssessment(answers) {
-  const total = answers.reduce((sum, a) => sum + a.value, 0);
-  const max = answers.length * 5;
-  const pct = Math.round((total / max) * 100);
-  let band = 'Moderate';
+  const total = answers.reduce((sum, item) => sum + Number(item.value || 0), 0);
+  let band = 'low';
   let explanation =
-    "You are managing in some areas and finding others more challenging, which is completely normal. Small, consistent changes — a steady routine, a moment of calm each day, and reaching out to people you trust — can make a real difference over time.";
-  if (pct >= 75) {
-    band = 'Good';
+    'Your responses suggest you are currently experiencing relatively low levels of distress. That is a good moment to notice what is working for you and keep building on it.';
+  if (total >= 30) {
+    band = 'very_high';
     explanation =
-      "Your answers suggest things are going quite well overall right now. The habits and connections that are working for you are worth noticing and protecting as life shifts.";
-  } else if (pct < 40) {
-    band = 'Low';
+      'Your responses suggest you may be experiencing a high level of distress. While I can help you reflect on your wellbeing and identify possible next steps, I am not a clinician and cannot provide mental health advice or treatment. It is highly recommended that you contact a GP, psychologist, Employee Assistance Program, or another qualified professional for support.';
+  } else if (total >= 22) {
+    band = 'high';
     explanation =
-      "Your answers suggest the last couple of weeks have felt quite difficult. This is a signal to be gentle with yourself, and to consider leaning on trusted people or a professional — you do not have to work through this alone.";
+      'Your responses suggest elevated distress that may be affecting your energy, focus or day-to-day life. It can help to talk with someone who can support you, such as a GP, a psychologist, or your Employee Assistance Program (EAP), and Support Connect in MindPulse can help you find options.';
+  } else if (total >= 16) {
+    band = 'moderate';
+    explanation =
+      'Your responses suggest some signs of strain that may be starting to affect your wellbeing. Reflecting on what is contributing, and building in some recovery time, can help before things escalate.';
   }
-  return { score: pct, band, explanation };
+
+  const features = {
+    low: ['Daily check-ins', 'Wellness Centre activities', 'Mood Calendar tracking and trend monitoring'],
+    moderate: ['Daily mood capture', 'Mood Calendar and pattern identification', 'Wellness Centre activities', 'Support Connect resources'],
+    high: ['Mood tracking', 'Wellness Centre resources', 'Support Connect'],
+    very_high: ['Support Connect', 'Emergency support information'],
+  };
+
+  return {
+    user_id: getStoredUserId(),
+    session_id: readStoredValue(STORAGE_KEYS.sessionId, ''),
+    score: total,
+    max_score: 50,
+    band,
+    band_label: {
+      low: 'Low (likely well)',
+      moderate: 'Moderate distress',
+      high: 'High distress',
+      very_high: 'Very high distress',
+    }[band],
+    explanation,
+    recommended_features: features[band],
+    support_options: [],
+    suggested_questions: [
+      'What habits or routines are currently supporting your wellbeing?',
+      'What helps you stay mentally and emotionally balanced when life becomes busy?',
+      'What would you like to do more of to maintain your wellbeing?',
+      'What early signs tell you that stress may be starting to build?',
+    ],
+    chat_seed: 'I just completed the check-in and would like to talk about it.',
+  };
 }
 
-// ---------- public API ----------
-// Asks the backend to create a session and returns its id (string).
-// In pure mock mode there is no backend, so a local id is used instead.
 export async function createSession(affiliation) {
-  if (USE_MOCK && !REAL_CHAT) return crypto.randomUUID();
-  const data = await postJson('/session', { affiliation: affiliation || '' });
+  if (USE_MOCK && !REAL_CHAT) {
+    const sessionId = crypto.randomUUID();
+    storeSessionId(sessionId);
+    return sessionId;
+  }
+  const storedUserId = getStoredUserId();
+  const data = await postJson('/session', {
+    user_id: storedUserId || undefined,
+    affiliation: affiliation || '',
+  });
+  if (data.user_id) storeUserId(data.user_id);
+  if (data.session_id) storeSessionId(data.session_id);
   return data.session_id || '';
 }
 
-// sessionId may be null on the first message: the backend creates one and
-// returns it as `session_id` in the reply.
 export async function sendChatMessage(sessionId, message) {
   if (USE_MOCK && !REAL_CHAT) {
     await new Promise((r) => setTimeout(r, 700));
-    return mockChatReply(message);
+    const response = mockChatReply(message);
+    const finalSessionId = response.session_id || sessionId || readStoredValue(STORAGE_KEYS.sessionId, '');
+    if (finalSessionId) storeSessionId(finalSessionId);
+    return response;
   }
-  return postJson('/chat', { session_id: sessionId || undefined, message });
+  const data = await postJson('/chat', { session_id: sessionId || undefined, message });
+  if (data.user_id) storeUserId(data.user_id);
+  if (data.session_id) storeSessionId(data.session_id);
+  return data;
 }
 
-// Saved conversation for a session: [{ role: 'user' | 'assistant', text }]
 export async function getChatHistory(sessionId) {
   if ((USE_MOCK && !REAL_CHAT) || !sessionId) return [];
   const data = await getJson(`/chat/history?session_id=${encodeURIComponent(sessionId)}`);
@@ -111,27 +202,35 @@ export async function getChatHistory(sessionId) {
 export async function getAssessmentQuestions() {
   if (USE_MOCK) {
     await new Promise((r) => setTimeout(r, 300));
-    return { questions: MOCK_QUESTIONS };
+    return {
+      instruction: 'In the past 4 weeks:',
+      options: K10_OPTIONS,
+      questions: MOCK_QUESTIONS,
+    };
   }
   const data = await getJson('/assessment/questions');
-  // Backend may return a plain array; the screens expect { questions }.
-  return Array.isArray(data) ? { questions: data } : data;
+  return data;
 }
 
 export async function submitAssessment(sessionId, answers) {
   if (USE_MOCK) {
     await new Promise((r) => setTimeout(r, 600));
-    return mockAssessment(answers);
+    const response = mockAssessment(answers);
+    if (response.user_id) storeUserId(response.user_id);
+    if (response.session_id) storeSessionId(response.session_id);
+    return response;
   }
-  return postJson('/assessment', { session_id: sessionId, answers });
+  const data = await postJson('/assessment', { session_id: sessionId || undefined, answers });
+  if (data.user_id) storeUserId(data.user_id);
+  if (data.session_id) storeSessionId(data.session_id);
+  return data;
 }
 
 export async function getTrends(sessionId) {
   if (USE_MOCK) {
     await new Promise((r) => setTimeout(r, 400));
-    return { trends: mockTrends(sessionId) };
+    return mockTrends(sessionId);
   }
   const data = await getJson(`/trends?session_id=${encodeURIComponent(sessionId)}`);
-  // Backend may return a plain array; the screens expect { trends }.
-  return Array.isArray(data) ? { trends: data } : data;
+  return Array.isArray(data) ? data : [];
 }

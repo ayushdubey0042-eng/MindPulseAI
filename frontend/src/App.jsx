@@ -11,6 +11,7 @@ const STORAGE_KEYS = {
   onboarded: 'mindpulse_onboarded',
   access: 'mindpulse_access',
   sessionId: 'mindpulse_session_id',
+  userId: 'mindpulse_user_id',
   conversations: 'mindpulse_conversations',
 };
 
@@ -64,6 +65,7 @@ export default function App() {
   const [sessionId, setSessionId] = useState(() =>
     readStoredValue(STORAGE_KEYS.sessionId, ''),
   );
+  const [userId, setUserId] = useState(() => readStoredValue(STORAGE_KEYS.userId, ''));
   const [tab, setTab] = useState('chat');
   const [chatSeed, setChatSeed] = useState('');
   const [chatKey, setChatKey] = useState(0);
@@ -81,6 +83,10 @@ export default function App() {
   useEffect(() => {
     writeStoredValue(STORAGE_KEYS.sessionId, sessionId);
   }, [sessionId]);
+
+  useEffect(() => {
+    writeStoredValue(STORAGE_KEYS.userId, userId);
+  }, [userId]);
 
   useEffect(() => {
     writeConversations(conversations);
@@ -103,9 +109,13 @@ export default function App() {
       const id = await createSession(nextAccess);
       setSessionId(id || '');
       writeStoredValue(STORAGE_KEYS.sessionId, id || '');
+      const storedUser = readStoredValue(STORAGE_KEYS.userId, '');
+      setUserId(storedUser || '');
     } catch {
       setSessionId('');
+      setUserId('');
       writeStoredValue(STORAGE_KEYS.sessionId, '');
+      writeStoredValue(STORAGE_KEYS.userId, '');
     }
     setOnboarded(true);
   }
@@ -118,9 +128,13 @@ export default function App() {
       const id = await createSession(access);
       setSessionId(id || '');
       writeStoredValue(STORAGE_KEYS.sessionId, id || '');
+      const storedUser = readStoredValue(STORAGE_KEYS.userId, '');
+      setUserId(storedUser || '');
     } catch {
       setSessionId('');
+      setUserId('');
       writeStoredValue(STORAGE_KEYS.sessionId, '');
+      writeStoredValue(STORAGE_KEYS.userId, '');
     }
     setChatKey((current) => current + 1);
   }
@@ -257,6 +271,7 @@ export default function App() {
               seedMessage={chatSeed}
               onSessionId={setSessionId}
               onMessageSent={handleMessageSent}
+              onNewChat={handleNewChat}
             />
           )}
           {tab === 'checkin' && (

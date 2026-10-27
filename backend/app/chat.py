@@ -1,45 +1,73 @@
-"""POST /chat endpoint."""
+"""POST /chat and session creation endpoints."""
 
-import uuid
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from app.config import LOCK_SESSION_AFTER_EMERGENCY
 from app.coach import RISK_TOKEN, get_coach_reply
-from app.risk import REFERRAL_MESSAGE, check_risk
-
-# Use the teammate's real database helpers when available,
-# otherwise fall back to the in-memory stand-ins.
-try:
-    from app.db import get_history, save_message
-except ImportError:
-    from app.db_stub import get_history, save_message
-
-try:
-    from app.db import create_session as _db_create_session
-except ImportError:
-    _db_create_session = None
+from app.db import (
+    create_session,
+    create_user,
+    get_history,
+    get_session,
+    get_session_detail,
+    get_user,
+    save_message,
+    save_risk_event,
+    session_exists,
+    set_session_status,
+    touch_user,
+)
+from app.risk import EMERGENCY_MESSAGE, REFERRAL_MESSAGE, check_risk
+from app.support import EMERGENCY_SUPPORT_OPTIONS
 
 router = APIRouter()
-
-# Only the most recent messages are sent to the model, which keeps replies
-# fast and cheap. The full history is still stored.
 MAX_HISTORY_MESSAGES = 20
 
 
 class ChatRequest(BaseModel):
-    # Optional: the API creates the session id on the first message and
-    # returns it. The client then sends it back on every later message.
     session_id: Optional[str] = None
     message: str
 
 
 class ChatResponse(BaseModel):
+    user_id: str
     session_id: str
     reply: str
     risk_flag: bool
     risk_level: str
+    session_locked: bool
+    support_options: list[dict]
+
+
+class SessionRequest(BaseModel):
+    user_id: Optional[str] = None
+    affiliation: Optional[str] = None
+
+
+@router.post("/session")
+def create_new_session(req: Optional[SessionRequest] = None):
+    """The server owns the session identity. Real auth is needed before production."""
+    req = req or SessionRequest()
+    user_id = req.user_id or None
+    if user_id is None or get_user(user_id) is None:
+        user_id = create_user()
+    else:
+        touch_user(user_id)
+
+    affiliation = req.affiliation or ""
+    session_id = create_session(user_id, affiliation)
+    return {"user_id": user_id, "session_id": session_id}
+
+
+@router.get("/session/{session_id}")
+def get_session_route(session_id: str):
+    detail = get_session_detail(session_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return detail
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -48,29 +76,88 @@ def chat(req: ChatRequest):
     if not message:
         raise HTTPException(status_code=422, detail="message must not be empty")
 
-    # The server owns session ids: create one if the client did not send it.
-    session_id = req.session_id or uuid.uuid4().hex
+    session_id = req.session_id
+    user_id = None
+    if not session_id or not session_exists(session_id):
+        user_id = create_user()
+        session_id = create_session(user_id, "")
 
-    # Load earlier turns BEFORE saving this one, so it is not duplicated.
+    if user_id is None:
+        row = get_session(session_id)
+        user_id = row["user_id"] if row else create_user()
+
+    session = get_session(session_id) or {}
+    session_locked = session.get("status") == "emergency_locked"
+    support_options = []
+
+    if session_locked:
+        reply = EMERGENCY_MESSAGE
+        risk = {"risk": True, "level": "high"}
+        save_message(session_id, "user", message, risk_flag=1)
+        assist_id = save_message(session_id, "assistant", reply, risk_flag=1)
+        save_risk_event(session_id, assist_id, risk["level"], "pattern")
+        return ChatResponse(
+            user_id=user_id,
+            session_id=session_id,
+            reply=reply,
+            risk_flag=True,
+            risk_level="high",
+            session_locked=True,
+            support_options=EMERGENCY_SUPPORT_OPTIONS,
+        )
+
     history = get_history(session_id)[-MAX_HISTORY_MESSAGES:]
-    save_message(session_id, "user", message)
+    save_message(session_id, "user", message, risk_flag=0)
 
     risk = check_risk(message)
     if risk["risk"]:
-        reply = REFERRAL_MESSAGE  # fixed text, the LLM is skipped entirely
-    else:
-        reply = get_coach_reply(history, message)
-        # Layer 2: the model flagged risk that the patterns missed.
-        if RISK_TOKEN in reply:
-            risk = {"risk": True, "level": "high"}
-            reply = REFERRAL_MESSAGE
+        reply = REFERRAL_MESSAGE
+        support_options = EMERGENCY_SUPPORT_OPTIONS
+        if LOCK_SESSION_AFTER_EMERGENCY:
+            set_session_status(session_id, "emergency_locked")
+            session_locked = True
+        assist_id = save_message(session_id, "assistant", reply, risk_flag=1)
+        save_risk_event(session_id, assist_id, risk["level"], "pattern")
+        return ChatResponse(
+            user_id=user_id,
+            session_id=session_id,
+            reply=reply,
+            risk_flag=True,
+            risk_level=risk["level"],
+            session_locked=session_locked,
+            support_options=support_options,
+        )
 
-    save_message(session_id, "assistant", reply)
+    latest_band = (get_session(session_id) or {}).get("latest_k10_band")
+    reply = get_coach_reply(history, message, band_key=latest_band)
+    if RISK_TOKEN in reply:
+        risk = {"risk": True, "level": "high"}
+        reply = REFERRAL_MESSAGE
+        support_options = EMERGENCY_SUPPORT_OPTIONS
+        if LOCK_SESSION_AFTER_EMERGENCY:
+            set_session_status(session_id, "emergency_locked")
+            session_locked = True
+        assist_id = save_message(session_id, "assistant", reply, risk_flag=1)
+        save_risk_event(session_id, assist_id, risk["level"], "model")
+        return ChatResponse(
+            user_id=user_id,
+            session_id=session_id,
+            reply=reply,
+            risk_flag=True,
+            risk_level=risk["level"],
+            session_locked=session_locked,
+            support_options=support_options,
+        )
+
+    assist_id = save_message(session_id, "assistant", reply, risk_flag=0)
     return ChatResponse(
+        user_id=user_id,
         session_id=session_id,
         reply=reply,
-        risk_flag=risk["risk"],
-        risk_level=risk["level"],
+        risk_flag=False,
+        risk_level="none",
+        session_locked=False,
+        support_options=[],
     )
 
 
@@ -78,19 +165,3 @@ def chat(req: ChatRequest):
 def chat_history(session_id: str):
     """Return the saved conversation so the UI can reload it after a refresh."""
     return {"session_id": session_id, "messages": get_history(session_id)}
-
-
-class SessionRequest(BaseModel):
-    affiliation: Optional[str] = None  # "organisation" or "independent"
-
-
-@router.post("/session")
-def create_new_session(req: Optional[SessionRequest] = None):
-    """The server creates the session id; the frontend calls this after onboarding."""
-    session_id = uuid.uuid4().hex
-    if _db_create_session is not None:
-        try:
-            _db_create_session(session_id, (req.affiliation if req else "") or "")
-        except Exception as exc:  # the id still works without a sessions row
-            print(f"[session] could not store session: {exc}")
-    return {"session_id": session_id}

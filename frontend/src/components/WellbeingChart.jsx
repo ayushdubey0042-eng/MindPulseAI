@@ -1,19 +1,31 @@
 import { useState } from 'react';
 
-// Lightweight, dependency-free line chart rendered as SVG.
-// Replaces recharts so the dev server has no bare-import to resolve.
+const BAND_META = [
+  { key: 'low', label: 'Low (likely well)', start: 10, end: 15, color: 'rgba(16, 185, 129, 0.10)' },
+  { key: 'moderate', label: 'Moderate distress', start: 16, end: 21, color: 'rgba(59, 130, 246, 0.10)' },
+  { key: 'high', label: 'High distress', start: 22, end: 29, color: 'rgba(250, 204, 21, 0.12)' },
+  { key: 'very_high', label: 'Very high distress', start: 30, end: 50, color: 'rgba(251, 146, 60, 0.12)' },
+];
+
+function bandFor(score) {
+  if (score <= 15) return 'low';
+  if (score <= 21) return 'moderate';
+  if (score <= 29) return 'high';
+  return 'very_high';
+}
+
 export default function WellbeingChart({ data }) {
   const [hover, setHover] = useState(null);
 
   const width = 640;
-  const height = 240;
+  const height = 260;
   const padX = 44;
-  const padTop = 12;
-  const padBottom = 28;
-  const yMin = 0;
-  const yMax = 100;
+  const padTop = 16;
+  const padBottom = 32;
+  const yMin = 10;
+  const yMax = 50;
 
-  const innerW = width - padX - 12;
+  const innerW = width - padX - 10;
   const innerH = height - padTop - padBottom;
 
   if (!data.length) return null;
@@ -26,46 +38,46 @@ export default function WellbeingChart({ data }) {
   const path = points
     .map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`)
     .join(' ');
-  const areaPath =
-    `${path} L ${points[points.length - 1].x.toFixed(1)} ${(padTop + innerH).toFixed(1)} ` +
-    `L ${points[0].x.toFixed(1)} ${(padTop + innerH).toFixed(1)} Z`;
 
-  const yTicks = [0, 25, 50, 75, 100];
+  const yTicks = [10, 20, 30, 40, 50];
 
   return (
     <div className="relative w-full">
-      <svg
-        viewBox={`0 0 ${width} ${height}`}
-        className="w-full h-64"
-        role="img"
-        aria-label="Line chart of wellbeing check-in scores over time"
-      >
+      <svg viewBox={`0 0 ${width} ${height}`} className="h-64 w-full" role="img" aria-label="K10 distress chart over time">
         <defs>
           <linearGradient id="wb-area" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#0d9488" stopOpacity="0.22" />
+            <stop offset="0%" stopColor="#0d9488" stopOpacity="0.18" />
             <stop offset="100%" stopColor="#0d9488" stopOpacity="0" />
           </linearGradient>
         </defs>
+
+        {BAND_META.map((band) => {
+          const yStart = yFor(band.start);
+          const yEnd = yFor(band.end);
+          const rectY = Math.min(yStart, yEnd);
+          const rectH = Math.abs(yEnd - yStart);
+          return (
+            <g key={band.key}>
+              <rect x={padX} y={rectY} width={innerW} height={rectH} fill={band.color} />
+              <text
+                x={width - 10}
+                y={rectY + 12}
+                textAnchor="end"
+                fontSize="10"
+                fill="#64748b"
+              >
+                {band.label}
+              </text>
+            </g>
+          );
+        })}
 
         {yTicks.map((t) => {
           const y = yFor(t);
           return (
             <g key={t}>
-              <line
-                x1={padX}
-                y1={y}
-                x2={width - 12}
-                y2={y}
-                stroke="#e2e8f0"
-                strokeDasharray="3 3"
-              />
-              <text
-                x={padX - 8}
-                y={y + 3}
-                textAnchor="end"
-                fontSize="11"
-                fill="#94a3b8"
-              >
+              <line x1={padX} y1={y} x2={width - 12} y2={y} stroke="#e2e8f0" strokeDasharray="3 3" />
+              <text x={padX - 8} y={y + 3} textAnchor="end" fontSize="11" fill="#94a3b8">
                 {t}
               </text>
             </g>
@@ -73,30 +85,16 @@ export default function WellbeingChart({ data }) {
         })}
 
         {data.map((d, i) => (
-          <text
-            key={d.date}
-            x={xFor(i)}
-            y={height - 8}
-            textAnchor="middle"
-            fontSize="11"
-            fill="#94a3b8"
-          >
+          <text key={`${d.created_at || d.date}-${i}`} x={xFor(i)} y={height - 8} textAnchor="middle" fontSize="11" fill="#94a3b8">
             {d.date.slice(5)}
           </text>
         ))}
 
-        <path d={areaPath} fill="url(#wb-area)" />
-        <path
-          d={path}
-          fill="none"
-          stroke="#0d9488"
-          strokeWidth={3}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
+        <path d={`M ${points[0].x.toFixed(1)} ${yFor(50)} L ${points[points.length - 1].x.toFixed(1)} ${yFor(50)}`} fill="none" stroke="transparent" />
+        <path d={path} fill="none" stroke="#0d9488" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" />
 
         {points.map((p, i) => (
-          <g key={i}>
+          <g key={`${p.d.created_at || p.d.date}-${i}`}>
             <circle
               cx={p.x}
               cy={p.y}
@@ -104,9 +102,9 @@ export default function WellbeingChart({ data }) {
               fill="#0d9488"
               stroke="#fff"
               strokeWidth={1.5}
-              className="cursor-pointer transition-all"
               onMouseEnter={() => setHover(i)}
               onMouseLeave={() => setHover(null)}
+              className="cursor-pointer transition-all"
             />
           </g>
         ))}
@@ -114,22 +112,16 @@ export default function WellbeingChart({ data }) {
         {hover !== null && (
           <g>
             <rect
-              x={points[hover].x - 42}
-              y={points[hover].y - 38}
-              width={84}
-              height={26}
+              x={points[hover].x - 46}
+              y={points[hover].y - 42}
+              width={92}
+              height={28}
               rx={8}
               fill="#0f172a"
               opacity={0.9}
             />
-            <text
-              x={points[hover].x}
-              y={points[hover].y - 21}
-              textAnchor="middle"
-              fontSize="12"
-              fill="#fff"
-            >
-              {data[hover].date}: {data[hover].score}
+            <text x={points[hover].x} y={points[hover].y - 23} textAnchor="middle" fontSize="12" fill="#fff">
+              {data[hover].score} · {bandFor(data[hover].score)}
             </text>
           </g>
         )}
